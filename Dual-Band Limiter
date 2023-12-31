@@ -1,0 +1,1220 @@
+desc:Dual-Band Limiter
+
+/*
+(C) 2023 S.D.Smith - all rights reserved
+*/
+
+slider1:thresh=1<0,1>-Threshold
+slider2:dtime=13<3,250,1>-Detector time(ms)
+slider3:lpf=2310<40,10000>-Freq
+slider4:logain=0<-24,24>-Lo Gain
+slider5:higain=0<-24,24>-Hi Gain
+slider7:rtime=1<1,14>-Release time(ms)
+slider8:fq=0.5<0.01,30.5>-Filter Q
+slider10:logainin=0<-24,24>-Input Gain Lo
+slider11:higainin=0<-24,24>-Input Gain Hi
+
+slider20:freq1=150<0,24000>-Freq1
+slider21:gain1=14<-24,24>-Gain1
+slider22:q1=2<0.001,24>-Q1
+
+
+slider23:freq2=850<0,24000>-Freq2
+slider24:gain2=-14<-24,24>-Gain2
+slider25:q2=1.5<0.001,24>-Q2
+
+slider26:freq3=12000<0,24000>-Freq3
+slider27:gain3=14<-24,24>-Gain3
+slider28:q3=1.5<0.001,24>-Q3
+
+slider30:PreEqEnabled=1<0,1,1>-PreEqEnabled
+slider31:PreEqVisible=1<0,1,1>-PreEqVisible
+
+slider32:PostEqEnabled=0<0,0,1>-PostEqEnabled
+slider33:PostEqVisible=0<0,0,1>-PostEqVisible
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+options:no_meter
+options:gfx_hz=144
+//options:gfx_hz=60
+//options:gfx_hz=30
+//options:gfx_hz=5
+@init
+function lerp(v,s,e)            ( (s-e)*c+s; );
+function clamp(x,minv,maxv)     ( min(max(x,minv),maxv););
+function smoothstep(x )         ( x*x*(3.0-2.0*x););
+function smoothstep3(x)         ( x*x*x*(x*(x*6.0-15.0)+10.0););
+function tanh(x)                ((exp(x)-exp(-x))/(exp(x)+exp(-x)););
+function glstep(v,edge0,edge1)  ( t = clamp((v - edge0) / (edge1 - edge0), 0.0, 1.0);t*t*(3.0-2.0*t);); 
+
+ 
+function ToCurve(x)             ( 1+0.135*log(x); );
+function InvToCurve(x)          ( exp((x-1)/0.135); ); 
+ 
+function DBtoLinear(x)          ( pow(10,x/10););
+function LinearToDB(x,dmin)     ( (-20*log10(x/10)/-dmin); );
+
+function SetFontSize(size)
+(
+gfx_setfont(1,"Arial Black",size);
+);
+// 0  1  2  3  4  5  6
+// a1,a2,b0,b1,b2,l1,l2
+function BiQuadResponse(Data,freq)
+(
+w0 = 2 * $pi * freq/srate;
+cosW0 = cos(w0);
+cos2W0 = cos(2.0 * w0);
+num = (Data[2]*Data[2]) + (Data[3]*Data[3]) + (Data[4]*Data[4]) + (2.0 * cosW0 * ((Data[2] * Data[3]) + (Data[3] * Data[4]))) + (2.0 * cos2W0 * Data[2] * Data[4]);
+den = 1.0 + (Data[0]*Data[0]) + (Data[1]*Data[1]) + (2.0 * cosW0 * (Data[0] + (Data[0] * Data[1]))) + (2.0 * cos2W0 * Data[1]);
+abs(num / den);
+);
+
+// q 0.5 = unity
+function BiQuadLoPass(Data,freq,q)
+(
+K = tan($pi * freq / (srate));
+norm = 1.0 / (1 + K / q + K * K);
+Data[2] = K * K * norm;
+Data[3] = 2.0 * Data[2];
+Data[4] = Data[2];
+Data[0] = 2 * (K * K - 1) * norm;
+Data[1] = (1 - K / q + K * K) * norm;
+);
+
+function BiQuadHiPass(Data,freq,q)
+(
+K = tan($pi * freq / (srate));
+norm = 1.0 / (1 + K / q + K * K);
+Data[2] = 1 * norm;
+Data[3] = -2.0 * Data[2];
+Data[4] = Data[2];
+Data[0] = 2 * (K * K - 1) * norm;
+Data[1] = (1 - K / q + K * K) * norm;
+);
+
+// 0  1  2  3  4  5  6
+// a1,a2,b0,b1,b2,l1,l2
+function BiQuadPeak(Data,freq,q,gain)
+(
+K = tan($pi * freq / (srate));
+Vboost = pow(10.0, abs(Gain) / 20.0);
+Vcut = pow(10.0, abs(Gain) / 20.0);
+(Gain >= 0) ? Vcut=1 : Vboost=1;
+norm = 1.0 / (1.0 + Vcut / q * K + K * K);
+Data[2] = (1.0 + Vboost / q * K + K * K) * norm;
+Data[3] = 2.0 * (K * K - 1.0) * norm;
+Data[4] = (1.0 - Vboost / q * K + K * K) * norm;
+Data[0] = Data[3];
+Data[1] = (1.0 - Vcut / q * K + K * K) * norm;
+);
+ // 0  1  2  3  4  5  6
+ // a1,a2,b0,b1,b2,l1,l2
+function BiQuadProcess(Data,in) local (bout)
+(
+bout = in * Data[2] + Data[5];
+Data[5] = (in * Data[3]) + Data[6] - (Data[0] * bout);
+Data[6] = (in * Data[4]) - (Data[1] * bout);
+bout;
+);
+
+
+function ArrayAlloc(size)
+(
+size=size;
+mem+=size;
+mem-size;
+);
+
+mem=0;
+
+FFTSize = 8192;
+FFTInputSize=512;
+
+FFTP=0;
+FFTBuffer=ArrayAlloc(FFTSize);
+FFTBufferOut=ArrayAlloc(FFTSize);
+FFTMag=ArrayAlloc(FFTSize);
+BiQuadLeft=ArrayAlloc(18);
+BiQuadRight=ArrayAlloc(18);
+BiQuadHiLeft=ArrayAlloc(18);
+BiQuadHiRight=ArrayAlloc(18);
+
+
+mulbufferhi=ArrayAlloc(4096);
+mulbufferlo=ArrayAlloc(4096);
+outbufferl=ArrayAlloc(4096);
+outbufferr=ArrayAlloc(4096);  
+
+inbufferl=ArrayAlloc(4096);
+inbufferr=ArrayAlloc(4096);
+
+inbufhil=ArrayAlloc(4096);
+inbufhir=ArrayAlloc(4096);
+
+PickHits=ArrayAlloc(4096);
+
+SliderParams=ArrayAlloc(100);
+MimicTimes=ArrayAlloc(100);
+
+PreEQ = ArrayAlloc(8*5*2); // 8 Params x 5 sets x 2 Stereo
+BiQuadQ=0.5;
+
+
+pbidx=0;
+count=0;
+oidx=0;
+in=0;
+detectorsize=0;
+amul=mul=1;
+tsplit=1;
+split=1;
+MouseItemIdx=-1;
+
+
+@gfx 800 300
+
+function GaussSample(position,Data,DataSize)
+(
+  I = floor(position);
+  F = position-I;
+  sum = 0;
+  ibx=-3;
+  while (ibx<=3)
+  (
+  GF = (ibx- F);
+  GW = exp(-GF * GF);
+  sum += GW * Data[floor(I + ibx)];
+  ibx+=1;
+  );
+  sum/1.8;
+);
+function sdfBox(px,py,bw,bh,rad)
+(
+bw=bw/2-rad;
+bh=bh/2-rad;
+dx=abs(px)-bw; dy=abs(py)-bh;
+mdx=max(dx,0); mdy=max(dy,0);
+(sqrt(mdx*mdx+mdy*mdy)+min(max(dx,dy),0))-rad;
+);
+
+function sdfCircle(px,py,rad) (sqrt(px*px+py*py)-rad;);
+
+function sdfLine( px,py,sx,sy,ex,ey ) local (lx,ly,h,dot1,dot2)
+(
+pax=px-sx; 
+pay=py-sy;
+bax=ex-sx;
+bay=ey-sy;
+dot1=pax*bax+pay*bay;
+dot2=bax*bax+bay*bay;
+h=clamp(dot1/dot2,0,1); 
+lx=pax-bax*h;
+ly=pay-bay*h;
+sqrt(lx*lx+ly*ly);
+);
+/*
+
+     l = length(b-a);
+      d = (b-a)/l;
+      q = (p-(a+b)*0.5);
+          q = mat2(d.x,-d.y,d.y,d.x)*q;
+          q = abs(q)-vec2(l,th)*0.5;
+     length(max(q,0.0)) + min(max(q.x,q.y),0.0); 
+*/
+function sdfSharpLine(px,py,ax,ay,bx,by,th)
+(
+  l = sqrt((bx-ax)*(bx-ax)+(by-ay)*(by-ay));
+  dx = (bx-ax)/l; dy = (by-ay)/l;
+  qx = (px-(ax+bx)*0.5); qy = (py-(ay+by)*0.5);
+  nqx = (dx*qx+dy*qy); nqy = (dy*qx-dx*qy);
+  nqx = abs(nqx)-l*0.5; nqy = abs(nqy)-th*0.5;
+  fqx=max(nqx,0); fqy=max(nqy,0);
+  sqrt(fqx*fqx+fqy*fqy)+min(max(nqx,nqy),0);
+);
+
+// 1= no AA 0.5=AA <0.5=blur
+
+function AABlur(blur)
+(
+g_blur=blur;
+);
+function AAColour(r,g,b,a)
+(
+gfx_set(r,g,b,a);g_r=r;g_g=g;g_b=b;g_a=a;GradientType=0;
+);
+function AASetRadialGradient(sx,sy,ex,ey,sr,sg,sb,sa,er,eg,eb,ea)
+(
+g_sx=sx;g_sy=sy;g_ex=ex;g_ey=ey;
+g_a=1;
+g_gr=sr;g_gb=sb;g_gg=sg;g_ga=sa;
+g_dr=er-sr;g_dg=eg-sg;g_db=eb-sb;g_da=ea-sa;
+g_radialdist=sqrt((g_ex-g_sx)*(g_ex-g_sx)+(g_ey-g_sy)*(g_ey-g_sy));
+GradientType=2;
+);
+
+function AASetLocalGradient(sr,sg,sb,sa,er,eg,eb,ea)
+(
+g_gr=sr;g_gb=sb;g_gg=sg;g_ga=sa;
+g_dr=er-sr;g_dg=eg-sg;g_db=eb-sb;g_da=ea-sa;
+GradientType=1;
+);
+
+function AAGradientPixel(x,y,v,AA)
+(
+exit=0;
+g_ClipMode==1?
+(
+ld=sqrt((x-g_ClipX)*(x-g_ClipX)+(y-g_ClipY)*(y-g_ClipY))-g_ClipRad;
+aa*=glstep(-ld,-1/g_blur,1/g_blur);
+ld>g_ClipRad? exit=1;
+);
+!exit?
+(
+GradientType==1 ?
+(
+gfx_x=x;gfx_y=y;
+gfx_set(g_gr+(g_dr*v),g_gg+(g_dg*v),g_gb+(g_db*v),(g_ga+(g_da*v))*AA);
+gfx_setpixel(g_gr+(g_dr*v),g_gg+(g_dg*v),g_gb+(g_db*v));
+);
+GradientType==2 ?
+(
+v=min(max(sqrt((x-g_sx)*(x-g_sx)+(y-g_sy)*(y-g_sy))/g_radialdist,0),1);
+gfx_x=x;gfx_y=y;
+gfx_set(g_gr+(g_dr*v),g_gg+(g_dg*v),g_gb+(g_db*v),(g_ga+(g_da*v))*AA);
+gfx_setpixel(g_gr+(g_dr*v),g_gg+(g_dg*v),g_gb+(g_db*v));
+);
+);
+);
+
+
+function AANoClip()
+(
+g_ClipMode=0;
+);
+
+function AAClipCircle(x,y,rad)
+(
+g_ClipMode=1;
+g_ClipX=x;
+g_ClipY=y;
+g_ClipRad=rad;
+);
+
+function AAPixel(x,y,dr,dg,db,a)
+(
+exit=0;
+g_ClipMode==1?
+(
+ld=sqrt((x-g_ClipX)*(x-g_ClipX)+(y-g_ClipY)*(y-g_ClipY))-g_ClipRad;
+a*=Smoothstep(max(min(-g_blur*ld,1),0));
+ld>g_ClipRad? exit=1;
+);
+!exit?
+(
+gfx_x=x;gfx_y=y;;
+gfx_set(dr,dg,db,a);gfx_setpixel(dr,dg,db);
+)
+);
+
+function AALine(sx,sy,ex,ey,rad) local (ssx,ssy,ld,alpha,AA)
+(
+asx=(min(sx,ex)-(rad));
+asy=(min(sy,ey)-(rad));
+aex=(max(sx,ex)+(rad));
+aey=(max(sy,ey)+(rad));
+ssy=floor(asy);
+while (ssy<=aey+1)
+  (
+  ssx=floor(asx);
+  while (ssx<=aex+1)
+    (
+    ld=sdfLine(ssx,ssy,sx,sy,ex,ey)-rad;
+    ld<1? 
+      (
+      AA=glstep(-g_blur*ld,-1,1);
+      GradientType==0 ? AAPixel(ssx,ssy,g_r,g_g,g_b,AA*g_a): AAGradientPixel(ssx,ssy,abs(ssy/rad),AA);
+      );
+    ssx+=1;    
+    );
+    ssy+=1;
+  );
+);
+
+function AAContinuousLine(px,py,sx,sy,ex,ey,eex,eey,rad) local (ssx,ssy,ld,alpha,AA)
+(
+
+rx1=(ceil(min(sx,px)))-rad-1;
+ry1=(ceil(min(sy,py)))-rad-1;
+rx2=(floor(max(sx,px)))+rad+1;
+ry2=(floor(max(sy,py)))+rad+1;
+
+asx=(min(sx,ex)-(rad));
+asy=(min(sy,ey)-(rad));
+aex=(max(sx,ex)+(rad));
+aey=(max(sy,ey)+(rad));
+ssy=floor(asy);
+
+while (ssy<=aey+1)
+  (
+  ssx=floor(asx);
+  while (ssx<=aex+1)
+    (
+    !(ssx>=rx1 && ssx<=rx2 && ssy>=ry1 && ssy<=ry2) ?
+    (
+    ld=sdfLine(ssx,ssy,sx,sy,ex,ey)-rad;
+    ld=min(ld,sdfLine(ssx,ssy,px,py,sx,sy)-rad);
+    ld=min(ld,sdfLine(ssx,ssy,ex,ey,eex,eey)-rad);
+    ld<1? 
+      (
+      AA=glstep(-g_blur*ld,-1,1);
+      GradientType==0 ? AAPixel(ssx,ssy,g_r,g_g,g_b,AA*g_a): AAGradientPixel(ssx,ssy,abs(ssy/rad),AA);
+      ); //:
+      //(
+     
+      //AAPixel(ssx,ssy,0,1,0,0.75);
+      //);  
+    );// : AAPixel(ssx,ssy,0,1,0,0.5);
+     ssx+=max(1,floor(abs(ld)));
+    //ssx+=1;
+    );
+    ssy+=1;
+  );
+);
+
+function AARoundRect(x,y,w,h,rad) local (sy,sy,px,py,bw,bh,l)
+(
+sy=0;
+fx=x-floor(x);
+fy=y-floor(y);
+while (sy<h)
+  (
+  sx=0;
+  while (sx<w)
+    (
+    px=sx-w/2; py=sy-h/2;
+    ld=sdfBox(px+fx,py+fy,w,h,rad);
+    ld<=1? 
+      (
+      alpha==glstep(-g_blur*ld,-1,1);
+      AAPixel(sx+x,sy+y,g_r,g_g,g_b,alpha*g_a);
+      sx+=1;
+      ): sx+=max(1,floor(abs(l)));
+    );
+    sy+=1;
+  );
+);
+  
+  function AACircle(x,y,rad) local (csy,csy,px,py,bw,bh,ld)
+  (
+  csy=floor(y)-rad;
+  while (csy<=(y+rad+1))
+    (
+    csx=floor(x)-rad;
+    while (csx<=(x+rad+1))
+      (
+      ld=sdfCircle(csx-x,csy-y,rad);
+      ld<1? 
+        (
+        alpha=glstep(-g_blur*ld,-1,1);
+        GradientType==0 ? AAPixel(csx,csy,g_r,g_g,g_b,alpha*g_a) : AAGradientPixel(csx,csy,0,alpha*g_a);
+        csx+=1;
+        ):
+        (
+        csx+=max(1,floor(abs(ld)));
+      );
+      );
+      csy+=1;
+    );
+  );
+  
+// scx,scy = arc cos/sin pos? ra= radius of arc rb= rounding/thickness 
+// sc is the sin/cos of the arc's aperture
+function sdfArc(px,py,scx,scy,ra,rb)
+(
+ px = abs(px);
+ l1=sqrt((px-scx*ra)*(px-scx*ra)+(py-scy*ra)*(py-scy*ra));
+ l2=sqrt((px*px)+(py*py));
+ ((scy*px>scx*py) ? l1 :  abs(l2-ra)) - rb;
+ 
+);
+
+
+  function AAArc(x,y,rad1,rad2,ap) local (csy,csy,px,py,bw,bh,ld)
+  (
+  x+=.5;
+  y+=.5;
+  xang=ap-0.5;
+  ax=cos(xang*$pi);
+  ay=sin(xang*$pi);
+  csy=floor(y)-rad1-rad2;
+  while (csy<=(y+rad1+rad2+1))
+    (
+    csx=floor(x)-rad1-rad2;
+    while (csx<=(x+rad1+rad2+1))
+      (
+      ld=sdfArc(csx-x,csy-y,ax,ay,rad1,rad2);
+      ld<1? 
+        (
+        alpha=glstep(-g_blur*ld,-1,1);
+        GradientType==0 ? AAPixel(csx,csy,g_r,g_g,g_b,alpha*g_a) : AAGradientPixel(csx,csy,0,alpha*g_a);
+        csx+=1;
+        ):
+        (
+        csx+=max(1,floor(abs(ld)));
+      );
+      );
+      csy+=1;
+    );
+  );
+function vgrad(x,y,h,sr,sg,sb,sa,er,eg,eb,ea)
+(
+h<0?
+(
+ta=sa;tr=sr;tg=sg;tb=sb;
+sa=ea;sr=er;sg=eg;sb=eb;
+ea=ta;er=tr;eg=tg;eb=tb;
+y=y+h;h=-h;
+);
+;
+h=min(gfx_h,h);
+h=max(0,h);
+gfx_x=x;
+dr=(er-sr);dg=(eg-sg);db=(eb-sb);da=(ea-sa);
+oh=h;
+// 15.2 2.2
+while (h>0)
+  (
+  gfx_y=y+h;
+  p=h/(oh);
+  er=sr+dr*p;
+  eg=sg+dg*p;
+  eb=sb+db*p;
+  ea=sa+da*p;
+  ta=ea;
+
+  floor(h)==0 ? ta*=1-((y)-floor(y));
+  floor(h)==floor(oh)? ta*=((y+h)-floor(y+h));
+  gfx_set(er,eg,eb,ta);
+  gfx_setpixel(er,eg,eb);
+   h-=1;
+  );
+);
+
+  function PowerButton(px,py,rad,value)
+  (
+  AAColour(0.2,0.2,0.2,1);
+  AACircle(px,py,rad);
+  value? AAColour(0.2,0.8,0.2,1): AAColour(0.4,0.4,0.4,1);
+  AAArc(px,py,rad*0.6,rad*0.125,0.25);
+  AALine(px,py-rad*0.25,px,py-rad*0.65,rad*0.125);
+  dist=sqrt((px-mouse_x)*(px-mouse_x)+(py-mouse_y)*(py-mouse_y));
+  dist<rad && MouseWentDown? value=!value;
+  value;
+  );
+
+  function InvisibleButton(px,py,w,h,value)
+  (
+  mouse_x>=px && mouse_x<=(px+w) &&
+  mouse_y>=py && mouse_y<=(py+h) && MouseWentDown? value=!value;
+  value;
+  );
+
+// Constants!
+ PreEQDBRange=30;
+ Qmul=1.125;
+ QMax=4096;
+ QMin=0.3;
+ !PostEQEnabled? SplitPos=gfx_h-min(gfx_h,gfx_w)*(1-0.85) :  SplitPos=gfx_h-min(gfx_h,gfx_w)*(1-0.25);
+ mouse_x>=0 && mouse_x<=gfx_w &&  mouse_y>=0 && mouse_y<=gfx_h? MouseOverWindow=1 : MouseOverWindow=0;
+ MouseWentDown = (mouse_cap&1) && (!Last_Cap&1);
+ MouseWentUp = (!mouse_cap&1) && (Last_Cap&1);
+ mouse_x>=0 && mouse_x<=gfx_w &&  mouse_y>=0 && mouse_y<=gfx_h? blur=1 : blur=0;  
+ blur=1;
+ ablur+=(blur-ablur)*0.15;
+
+ sx=0;
+ si=(pbidx+4096-gfx_w)%4096;
+ hh=gfx_h/2;
+
+ gx1=20;
+
+ gfx_set(1,1,1,0.2);
+
+ StartFreqP = 5 / (srate / 2); // 30hz
+ EndFreqP = 20000 / (srate / 2); // 16khz
+ FreqCurve=curvef;
+
+function vfillbend(x,y,h)
+  (
+  oh=h;
+  
+  gfx_x=x;
+  while (h>0)
+  (
+  p=h/oh;
+  gfx_y=y+h;
+  gfx_set(1,1,1,pow(sin(p*$pi),1/2)*0.2);
+  gfx_setpixel(0.75,0.75,0.75);
+  h-=1;
+  )
+  );
+
+  function hfillbend(x,y,w)
+  (
+  ow=w;
+  gfx_y=y;
+  while (w>0)
+  (
+  p=w/ow;
+  gfx_x=x+w;
+  gfx_set(1,1,1,pow(sin(p*$pi),1/2)*0.2);
+  gfx_setpixel(0.75,0.75,0.75);
+  w-=1;
+  )
+  );
+
+lw=2;
+///MouseOverWindow? tsplit=0.85:tsplit=1;
+tsplit=0.85;
+split=0.85;
+
+//split+=(tsplit-split)*0.1;
+psv=0.5*SPlitPos;
+ppsv=0.5*SPlitPos;
+pppsv=0.5*SPlitPos;
+xxcount=0;
+while (sx<gfx_w)
+  (
+  // Draw FFT
+  FP = StartFreqP+(InvToCurve((sx/gfx_w))  * (EndFreqP - StartFreqP));
+  v=GaussSample(FP*(FFTSize/2),FFTMag,FFTSize/2);
+  v=1-(-20*log10((v)/10)/-DBMin);
+  v=min(max(v,0),1);
+  gfx_set(0.5,0.0,0.5,0.2);
+  vgrad(sx,gfX_h*split,-v*gfx_h*split,0.2,0.2,0.2,1,0.2,0.2,0.2,1);
+  gfx_set(1,1,0.,0.25);
+  gfx_line(sx-1,SplitPos-(pv)*SplitPos,sx,SplitPos-v*SplitPos);
+  //AAColour(0.2,0.2,1,1);
+  //AALine(sx-1,gfx_h*split-(pv)*gfx_h*split,sx,gfX_h*split-v*gfx_h*split,5);
+  pv=v;
+  PreEQVisible && PreEqEnabled?
+  (
+  // PreEQ Response
+  PreEQResponse=BiQuadResponse(PreEQ+(0*16),FP*(srate/2));
+  PreEQResponse*=BiQuadResponse(PreEQ+(1*16),FP*(srate/2));
+  PreEQResponse*=BiQuadResponse(PreEQ+(2*16),FP*(srate/2));
+  AAA=PreEQResponse;
+  PreEQResponse=LinearToDB(PreEQResponse*10,DBMin);
+  AAAB=PreEQResponse;
+  gfx_set(0,0,1,1);
+  srh=floor(SplitPos*0.5);
+  vgrad(sx,srh,min((PreEQResponse)*(SplitPos)*30/PreEQDBRange,SplitPos/2),0,0,0.0,0.0,0.8,0.0,1,0.65);
+
+  xxcount==0?
+    (
+    psv=(PreEQResponse-0.165)*SplitPos+Srh;
+    ppsv=psv;
+    pppsv=psv;
+    );
+  Skip=6;  
+  xxcount%Skip==0?
+    (
+    sv=(srh+min((PreEQResponse)*(SplitPos)*30/PreEQDBRange,SplitPos/2));
+    AAColour(1,0.8,0.8,0.75);
+    AAContinuousLine(sx-3*Skip,pppsv,sx-2*Skip,ppsv,sx-1*Skip,psv,sx,sv, 1);
+    pppsv=ppsv;
+    ppsv=psv;
+    psv=sv;
+    );
+  xxcount+=1;
+ );
+
+  // Hi/Lo Response
+  ResponseOffset=0.4;// we draw offset so theres more screen estate
+  Response=BiQuadResponse(BiQuadLeft,FP*(srate/2));
+  Response=ResponseOffset-(-20*log10((Response)/10)/-DBMin);
+  Response=min(max(Response,0),1);
+  AAColour(0.4,0.4,0.8,0.15);
+  gfx_set(1,0.5,0,0.1);
+  gfx_line(sx,SplitPos,sx,SplitPos-Response*SplitPos);
+  gfx_set(1,0.5,0,0.2);
+  gfx_line(sx-1,SplitPos-pResponse*SplitPos,sx,SplitPos-Response*SplitPos,lw);
+  pResponse=Response;
+  Response=BiQuadResponse(BiQuadHiLeft,FP*(srate/2));
+  Response=ResponseOffset-(-20*log10((Response)/10)/-DBMin);
+  Response=min(max(Response,0),1);
+  
+  gfx_set(0,0.5,1,0.1);
+  gfx_line(sx,SplitPos,sx,SplitPos-Response*SplitPos);
+  gfx_set(0,0.5,1,0.2);
+  gfx_line(sx-1,SplitPos-pHiResponse*SplitPos,sx,SplitPos-pHiResponse*SplitPos,lw);
+  pHiResponse=Response;
+  
+
+  mulp=pow(1-mulbufferlo[si],6);
+    mulphi=pow(1-mulbufferhi[si],6);
+  si=(si+1)%4096;
+ // Draw Gain Line
+  split<0.99?
+  (
+  gfx_set(1,0.5,0,0.4);
+  vgrad(sx,gfX_h,-mulp*(gfx_h-SplitPos),  1,0.5,0,0.3, 1.0,0.5,0,0.5);
+  vgrad(sx,gfX_h,-mulphi*(gfx_h-SplitPos),0,0.5,1,0.3, 0.0,0.5,1,0.5);
+
+  gfx_Set(0.6,0.4,.4,1);
+  gfx_line(sx-1,gfx_h-pmulp*(gfx_h-SplitPos),sx,gfx_h-mulp*(gfx_h-SplitPos),lw);
+  gfx_line(sx-1,gfx_h-pmulphi*(gfx_h-SplitPos),sx,gfx_h-mulphi*(gfx_h-SplitPos),lw);
+ PickHits[si]&1? 
+ (
+ gfx_set(1,1,0,1);
+ 
+ gfx_line(sx,gfx_h,sx,SplitPos,lw);
+ );
+
+ 
+ pmulphi=mulphi;
+ 
+  pmulp=mulp;
+  );
+  sx+=1;
+);
+// AAColour(1,1,1,1);
+// AAContinuousLine(sx-3*5,pppsv,sx-2*5,ppsv,sx-1*5,psv,sx,(PreEQResponse-0.165)*SplitPos+srh,1);
+
+  SetFontSize(16);
+// Draw Freq Grid
+gx1=20;
+while (gx1<=10000)
+  (
+  fpos=(gx1/(srate/2)-StartFreqP)/(EndFreqP - StartFreqP);
+  freq=fpos;
+  fpos=ToCurve(fpos); // to curve
+  vfillbend(fpos*gfX_w,0,(SplitPos));
+  gfx_x=fpos*gfx_w;
+  gfx_y=(SplitPos)-20;
+  gfx_set(1,1,1,0.5);
+  ts=#;
+
+ gx1==2000 || gx1==5000 || gx1==10000|| gx1==20 || gx1==50 || gx1==100 || gx1==200 || gx1==500 || gx1==1000?
+ (
+ sprintf(ts,"%d",gx1);
+ gx1>=1000?
+ sprintf(ts,"%dk",gx1/1000);
+ gfx_measurestr(ts,tw,th);
+ gfx_y=40;
+ gfx_x=gfx_x-tw/2;
+ gfx_drawstr(ts);
+ );
+  gx1+=10;
+  gx1>100? gx1+=90;
+  gx1>1000? gx1+=900;
+  );
+  
+DBMin=-120;
+// Draw DB Grid
+gx1=30;
+while (gx1>=DBMin)
+  (
+  v=(gx1-30)/(DBMin-30);
+  hfillbend(0,v*(SplitPos),gfx_w);
+
+  gfx_set(1,1,1,0.4);
+  ts=#;
+  sprintf(ts,"%+d",gx1);
+  gfx_measurestr(ts,tw,th);
+ 
+  gfx_y=v*(SplitPos)-th/2;
+  gfx_x=gfx_w-tw-8;
+  gfx_drawstr(ts);
+  gx1-=10;
+  );  
+// Draw PreEQ DB Grid
+gfx_measurestr("-30",tw,th);
+gx1=-PreEQDBRange;
+ PreEQVisible && PreEqEnabled?
+while (gx1<=PreEQDBRange)
+  (
+  gfx_set(0.7,0,1,1);
+  ts=#;
+  sprintf(ts,"%+2d",gx1);
+ 
+ 
+  gfx_y=(0.5-gx1/(PreEQDBRange*2))*(SplitPos)-th/2;
+  gfx_x=10;
+  gfx_drawstr(ts);
+  gx1+=10;
+  );  
+  
+  ts="Dual-Band Limiter";
+  SetFontSize(32);
+  gfx_measurestr(ts,tw,th);
+  
+  AAColour(1,1,0,0.25);
+ // AASetLocalGradient(0.3,0.2,0.2,1,0.1,0.1,0.1,1);
+  AALine((gfx_w-tw)/2,th/2,(gfx_w-tw)/2+tw,th/2,th/1.5);
+
+  gfx_set(0.8,0.8,0.8,ablur*2);
+ 
+
+  gfx_x=(gfx_w-tw)/2;gfx_y=0;
+  gfx_drawstr(ts);
+
+  AAColour(0.7,0.2,1,0.7);
+  gfx_measurestr("Pre-EQ",tw,th);
+  gfx_x=(gfx_w/5-tw);gfx_y=+th/8;
+  PreEQVisible=InVisibleButton(gfx_x,gfx_y,tw,th,PreEQVisible);
+  PreEQVisible ? AAColour(.7,0,1,0.7) :  AAColour(.3,.3,0.3,0.7);
+  gfx_drawstr("Pre-EQ");
+  PreEQEnabled=PowerButton((gfx_w/5-tw)-th/1.5,20,th/2,PreEQEnabled);
+  
+  gfx_measurestr("Post-EQ",tw,th);
+  gfx_x=(gfx_w/5*4);gfx_y=+th/8;
+  PostEQVisible=InVisibleButton(gfx_x,gfx_y,tw,th,PostEQVisible);
+  PostEQVisible ? AAColour(1.0,.9,0.2,0.7) :  AAColour(.3,.3,0.3,0.7);
+  gfx_drawstr("Post-EQ");
+  
+  PostEQEnabled=PowerButton(((gfx_w/5*4))-th/1.5,20,th/2,PostEQEnabled);
+function ControlPoint(x,y,rad,value,format)
+(
+  AACircle(x,y,rad);
+  AACircle(x,y,rad*0.5);
+  
+  ts=#;
+
+  sprintf(ts,format,value);
+  gfx_measurestr(ts,tw,th);
+  gfx_x=x-tw/2; 
+  gfx_y=y+((y>gfx_h/2) ? -th*1.7 : th);
+  gfx_set(1,1,1,0.5*g_blur);
+  gfx_drawstr(ts);
+  MouseOverItem=0;
+  SliderCount+=1;
+  ControlIdx==-1 && mouse_x>=(x-20) && mouse_x<=(x+20) &&  mouse_y>=(y-20) && mouse_y<=(y+20) ?
+  (
+  MouseOverItem=1;
+  ControlIdx=SliderCount;
+  );
+);
+
+mwheel=mouse_wheel;
+mouse_wheel=0;
+SliderCount=0;
+
+  !mouse_cap&1? (Move=0; ControlIdx=-1;);
+  // Draw Pre-Eq Handles
+  
+    AAColour(1,0.5,1,0.25);
+  SetFontSize(16);
+  PreEQVisible && PreEqEnabled?
+  (
+ 
+   SetFontSize(16);
+   HandleX=ToCurve((freq1/(srate/2)-StartFreqP)/(EndFreqP - StartFreqP))*gfx_w;
+   ControlPoint(HandleX,(0.5-gain1/(PreEQDBRange*2))*SplitPos,10,freq1,"%2.0fhz");
+   ((Last_Cap & 1) == 0) && mouse_cap&1 && MouseOverItem ? Move=1;
+   ControlIdx==SliderCount && mwheel!=0?
+   (
+   mwheel>0? q1/=Qmul; mwheel<0? q1*=Qmul; q1=clamp(q1,QMin,QMax);
+   BiQuadPeak(PreEQ+(0*16),Freq1,Q1,Gain1); BiQuadPeak(PreEQ+(0*16+8),Freq1,Q1,Gain1); // R3
+   );
+   Move==1 && ControlIdx==SliderCount? 
+   (
+   freq1=clamp((((EndFreqP - StartFreqP)*InvToCurve((mouse_x)/gfx_w))+StartFreqP)*(srate/2),30,20000);
+   Gain1=clamp(-((mouse_y-SplitPos/2)/(SplitPos/2))*(PreEQDBRange),-PreEQDBRange,PreEQDBRange);
+   BiQuadPeak(PreEQ+(0*16),Freq1,Q1,Gain1); BiQuadPeak(PreEQ+(0*16+8),Freq1,Q1,Gain1); // R3
+   );
+   
+   HandleX=ToCurve((freq2/(srate/2)-StartFreqP)/(EndFreqP - StartFreqP))*gfx_w;
+   ControlPoint(HandleX,(0.5-gain2/(PreEQDBRange*2))*SplitPos,10,freq2,"%2.0fhz");
+   ((Last_Cap & 1) == 0) && mouse_cap&1 && MouseOverItem ? Move=1;
+   ControlIdx==SliderCount && mwheel!=0?
+   (
+   mwheel>0? q2/=Qmul; mwheel<0? q2*=Qmul; q2=clamp(q2,QMin,QMax);
+   BiQuadPeak(PreEQ+(1*16),Freq2,Q2,Gain2); BiQuadPeak(PreEQ+(1*16+8),Freq2,Q2,Gain2); // R3
+   );   
+   Move==1 && ControlIdx==SliderCount? 
+   (
+   freq2=clamp((((EndFreqP - StartFreqP)*InvToCurve((mouse_x)/gfx_w))+StartFreqP)*(srate/2),30,20000);
+   Gain2=clamp(-((mouse_y-SplitPos/2)/(SplitPos/2))*(PreEQDBRange),-PreEQDBRange,PreEQDBRange);
+   BiQuadPeak(PreEQ+(1*16),Freq2,Q2,Gain2); BiQuadPeak(PreEQ+(1*16+8),Freq2,Q2,Gain2); // R3
+   );  
+   
+   HandleX=ToCurve((freq3/(srate/2)-StartFreqP)/(EndFreqP - StartFreqP))*gfx_w;
+   ControlPoint(HandleX,(0.5-gain3/(PreEQDBRange*2))*SplitPos,10,freq3,"%2.0fhz");
+   ((Last_Cap & 1) == 0) && mouse_cap&1 && MouseOverItem ? Move=1;
+   ControlIdx==SliderCount && mwheel!=0?
+   (
+   mwheel>0? q3/=Qmul; mwheel<0? q3*=Qmul; q3=clamp(q3,QMin,QMax);
+   BiQuadPeak(PreEQ+(2*16),Freq3,Q3,Gain3); BiQuadPeak(PreEQ+(2*16+8),Freq3,Q3,Gain3); // R3
+   );   
+   Move==1 && ControlIdx==SliderCount? 
+   (
+   freq3=clamp((((EndFreqP - StartFreqP)*InvToCurve((mouse_x)/gfx_w))+StartFreqP)*(srate/2),30,20000);
+   Gain3=clamp(-((mouse_y-SplitPos/2)/(SplitPos/2))*(PreEQDBRange),-PreEQDBRange,PreEQDBRange);
+   BiQuadPeak(PreEQ+(2*16),Freq3,Q3,Gain3); BiQuadPeak(PreEQ+(2*16+8),Freq3,Q3,Gain3); // R3
+   );
+   );
+  // Draw Hi/Lo Handle
+  Response=ResponseOffset-LinearToDB(BiQuadResponse(BiQuadLeft,lpf),DBMin);
+  HandleX=ToCurve((lpf/(srate/2)-StartFreqP)/(EndFreqP - StartFreqP))*gfx_w;
+  HandleY=SplitPos-SplitPos*Response;
+  AAColour(1,1,0,0.25);
+  ControlPoint(HandleX,HandleY,10,lpf,"%2.0fhz");
+  
+  ((Last_Cap & 1) == 0) && mouse_cap&1 && MouseOverItem ? Move=1;
+  Move==1  && ControlIdx==SliderCount?
+  (
+   lpf=clamp((((EndFreqP - StartFreqP)*InvToCurve((mouse_x)/gfx_w))+StartFreqP)*(srate/2),30,20000);
+   sliderchange(slider3);
+   BiQuadLoPass(BiQuadLeft,lpf,fq);
+   BiQuadLoPass(BiQuadRight,lpf,fq);
+   BiQuadHiPass(BiQuadHiLeft,lpf,fq);
+   BiQuadHiPass(BiQuadHiRight,lpf,fq);
+  );
+  
+
+
+
+
+function AADial(x,y,rad,name,format,value,minv,maxv,default)
+(
+md=sqrt((x-mouse_x)*(x-mouse_x)+(y-mouse_y)*(y-mouse_y));
+MouseIsOver=0;
+md<rad? MouseIsOver=1;
+MouseIsOver && mouse_cap&2? value=default;
+AASetRadialGradient(x-40,y-50,x+40,y+39+rad,0.3,0.3,0.3,1,0,0,0,1);
+AACircle(x,y,rad);
+pvalue=(value-minv)/(maxv-minv);
+mouseang=(0.10+atan2(y-mouse_y,x-mouse_x)/($pi*2));
+oma=mouseang;
+
+mouseang<0 && mouseang>-0.15? mouseang=0;
+mouseang<0? mouseang+=1;
+mouseang=min(max(mouseang,0),0.7);
+ang=pvalue*0.7;
+!mouse_cap&1  ? ControlIdx=-1;
+SliderCount+=1;
+ControlIdx==-1 && mouse_cap&1 && MouseIsOver ? ControlIdx=SliderCount;
+
+ControlIdx==SliderCount?
+  (
+  ang=mouseang;
+  value=(ang/0.7)*(maxv-minv)+minv;
+  );
+
+mwheel!=0 && MouseIsOver?
+  (
+  mwheel>0? value+=1;
+  mwheel<0? value-=1;
+  );
+
+value=clamp(value,minv,maxv);
+
+//xang+=0.0001;
+//ang=xang;
+dx=cos((ang+0.4)*2.0*$pi);
+dy=sin((ang+0.4)*2.0*$pi);
+xr=rad*0.2;
+
+AASetRadialGradient(x-xr*2,y-xr*2,x+xr,y+xr,0.5,0.5,0.6,1,0.3,0.3,0.3,1);
+AAClipCircle(x,y,rad+0.5);
+AACircle(x+dx*rad,y+dy*rad,rad*0.43);
+
+
+AAColour(1,0,0,0.2);
+AALine(x+dx*rad,y+dy*rad,x+dx*rad*0.61,y+dy*rad*0.61,2);
+AANoClip();
+
+ts=#;
+
+
+
+gfx_set(0.6,0.6,0.6,1);
+sprintf(ts,format,value);
+gfx_measurestr(ts,tw,th);
+
+gfx_x=x-tw/2;
+gfx_y=y-th/2;
+gfx_drawstr(ts);
+
+gfx_measurestr(name,tw,th);
+gfx_x=x-tw/2;
+gfx_y=y+rad/6+th/0;
+gfx_drawstr(name);
+
+value;
+);
+
+ ablur>0.01?
+ (
+  gfx_measurechar("H",tw,th); 
+  AABlur(ablur);
+ DialX=(gfx_h-SplitPos);
+ DialY=gfx_h-(gfx_h-SplitPos);
+ DialRad=min(((gfx_h-SplitPos)/2),70);
+  DialX=DialRad*2;//(gfx_h-SplitPos);
+ DialGap=0;
+ AAColour(1,0.5,0.2,0.3);
+ AALine(DialGap+DialX,DialY,DialGap+DialX*2.1,DialY,DialRad+5);
+ AAColour(0,0.5,1,0.3);
+ 
+ AALine(gfx_w-DialGap-DialX,DialY,gfx_w-DialGap-DialX*2.1,DialY,DialRad+5);
+ SetFontSize(DialRad/3);
+ logainin=AADial(DialGap+DialX,DialY,DialRad,"In-Gain","%2.1f db",logainin,-24,24,0);
+ logain=AADial(DialGap+DialX*2.1,DialY,DialRad,"Out-Gain","%2.1f db",logain,-24,24,0);
+ higain=AADial(gfx_w-DialGap-DialX,DialY,DialRad,"Out-Gain","%2.1f db",higain,-24,24,0);
+ higainin=AADial(gfx_w-DialGap-(DialX*2.1),DialY,DialRad,"In-Gain","%2.1f db",higainin,-24,24,0);
+
+
+ gfx_set(1,1,1,0.5);
+ gfx_measurestr("Lo-Band",tw,th);
+ gfx_x=(dialx+dialX*2.2)/2+DialGap-tw/2;
+ gfx_y=Dialy-DialRad;
+ GFX_drawstr("Lo-Band");
+ gfx_measurestr("Hi-Band",tw,th);
+ gfx_x=gfx_w-((dialx+dialX*2.2)/2+DialGap)-tw/2;
+ gfx_y=Dialy-DialRad;
+ GFX_drawstr("Hi-Band");
+ zang+=0.01;
+ px=200+cos(zang)*111;
+ py=200+sin(zang)*111;
+  gfx_set(0,0,0,1);
+  gfx_line(gfx_w-40,30/2+20,gfx_w-20,30/2+20);
+  gfx_set(0.75,0.75,0.75,ablur*2);
+  gfx_x=gfx_w-55;
+  gfx_y=gfx_h-th*2;
+  );
+  
+  
+  function ButtonText(x,y,str,val)
+  (
+  gfx_measurestr(str,tw,th);
+  gfx_x=x;
+  gfx_y=y-th/2;
+  gfx_drawstr(str);
+  PowerButton(x-th/2,y,th/2,val);
+  
+  );
+  MDialCount= floor(MimicCount)<=0 ? 1 : 4;
+  MDialRad=DialRad/1.5;
+  gfx_set(0.3,0.3,1,1);
+  SetFontSize(25);
+ // MimicOn=ButtonText(gfx_w/2,SplitPos-MDialRad*1.6,"Cloner",MimicOn);
+  SetFontSize(14);
+  // 1 2 3 4
+  DialStartX=gfX_w/2-(MDialRad*1.05*(MDialCount-1));
+  DialY=SplitPos+MDialRad;
+  AALine(DialStartX,DialY,DialStartX+((MDialRad)*2.1*(MDialCount-1)+0.001),DialY,MDialRad+5);
+  MimicCount=floor(AADial(DialStartX+MDialRad*2.1*0,DialY,MDialRad,"Clones","%d",MimicCount,0,14,0));
+  MDialCount>1?
+    (
+    MimicPan=AADial(DialStartX+MDialRad*2.1*1,DialY,MDialRad,"Pan","%0.2f",MimicPan,-1,1,0);
+    MimicSpread=AADial(DialStartX+MDialRad*2.1*2,DialY,MDialRad,"Spread","%0.2f",MimicSpread,0,1,0);
+    MimicLevel=AADial(DialStartX+MDialRad*2.1*3,DialY,MDialRad,"Level","%0.2f db",MimicLevel,-24,24,0);
+    );
+
+//  gfx_set(1,1,1,1);
+//  gfx_line(gfx_w/2,0,gfx_w/2,gfx_h);
+/*
+x=0;
+aang+=0.01;
+lcount=6;
+spx=gfx_w/2;
+spy=SPlitPos/2;
+rad=SplitPos/2-20;
+xxmul=(abs(xxmul)+0.015);
+xxmul>lcount*5 ? xxmul-=lcount*5;
+xxmul=1;
+AAColour(0.85,0.85,0.85,0.05);
+while (x<lcount)
+(
+ang=aang+2*$pi*x/lcount*xxmul;
+angd=2*$pi*1/lcount*xxmul;
+px=cos(ang-angd)*rad+spx;
+py=sin(ang-angd)*rad+spy;
+
+sx=cos(ang)*rad+spx;
+sy=sin(ang)*rad+spy;
+ex=cos(ang+angd)*rad+spx;
+ey=sin(ang+angd)*rad+spy;
+eex=cos(ang+angd*2)*rad+spx;
+eey=sin(ang+angd*2)*rad+spy;
+AAContinuousLine(px,py,sx,sy,ex,ey,eex,eey,20);
+x+=1;
+);
+*/
+  Last_Cap=mouse_cap;
+  
+@slider
+ BiQuadLoPass(BiQuadLeft,lpf,fq);
+ BiQuadLoPass(BiQuadRight,lpf,fq);
+ BiQuadHiPass(BiQuadHiLeft,lpf,fq);
+ BiQuadHiPass(BiQuadHiRight,lpf,fq); 
+ BiQuadPeak(PreEQ+(0*16),Freq1,Q1,Gain1); // L1
+ BiQuadPeak(PreEQ+(0*16+8),Freq1,Q1,Gain1); // R1
+ BiQuadPeak(PreEQ+(1*16),Freq2,Q2,Gain2); // L2
+ BiQuadPeak(PreEQ+(1*16+8),Freq2,Q2,Gain2); // R2
+ BiQuadPeak(PreEQ+(2*16),Freq3,Q3,Gain3); // L3
+ BiQuadPeak(PreEQ+(2*16+8),Freq3,Q3,Gain3); // R3
+@sample
+
+ 
+
+inl=spl0;
+inr=spl1;
+// Process PreEQ
+PreEQEnabled?
+  (
+  inl=BiQuadProcess(PreEQ+(0*16+0),inl);
+  inl=BiQuadProcess(PreEQ+(1*16+0),inl);
+  inl=BiQuadProcess(PreEQ+(2*16+0),inl);
+  inr=BiQuadProcess(PreEQ+(0*16+8),inr);
+  inr=BiQuadProcess(PreEQ+(1*16+8),inr);
+  inr=BiQuadProcess(PreEQ+(2*16+8),inr);
+  );
+tx+=80/srate;
+
+//inl=sin(tx*2*$pi);
+//inr=inl;
+outl=outbufferl[coff+count];
+outr=outbufferr[coff+count];
+// FFT
+FFTBuffer[FFTSize-FFTInputSize+FFTP]=outl+outr;
+FFTP+=1;
+FFTP>=FFTInputSize?
+  (
+  
+  memcpy(FFTBufferOut,FFTBuffer,FFTSize);
+  bx=0;
+  while (bx<FFTSize)
+  (
+  FFTBufferOut[bx]=FFTBuffer[bx]* pow(((sin(bx / FFTSize * 3.14159265) + 1.) * 0.5), 8);
+  bx+=1;
+  );
+  fft_real(FFTBufferOut,FFTSize);
+  fft_permute(FFTBufferOut,FFTSize/2);
+  bx=0;
+  while (bx<FFTSize/2)
+    (
+    ri=FFTBufferOut[bx*2+0]/(FFTSize);
+    im=FFTBufferOut[bx*2+1]/(FFTSize);
+    FFTMag[bx]=(sqrt(ri*ri+im*im));
+    bx+=1;
+    );
+   
+  bx=0;
+  while (bx<(FFTSize-FFTInputSize))
+    (
+    FFTBuffer[bx]=FFTBuffer[bx+FFTInputSize];
+    bx+=1;
+    );
+    
+  FFTP=0;
+  );
+// Limiter Filters 
+fl=BiQuadProcess(BiQuadLeft,inl);
+fr=BiQuadProcess(BiQuadRight,inr);
+inhil=-BiQuadProcess(BiQuadHiLeft,inl);
+inhir=-BiQuadProcess(BiQuadHiRight,inr);
+
+
+
+detectorsize=floor(srate/1000*dtime/2)*2; // make it a even size
+
+outl=outbufferl[coff+count];
+outr=outbufferr[coff+count];
+inbufferl[coff+count]=fl*DBtoLinear(logainin);
+inbufferr[coff+count]=fr*DBtoLinear(logainin);
+inbufhil[coff+count]=inhil*DBtoLinear(higainin);
+inbufhir[coff+count]=inhir*DBtoLinear(higainin);
+count+=1;
+
+count>=(detectorsize/2) ?
+  (
+  l=0;
+  peakhi=0;
+  peaklo=0;
+  while(l<detectorsize)
+    (
+    idx=(coff+count+l)%detectorsize;
+    peakhi=max(max(peakhi,abs(inbufhil[idx])),abs(inbufhir[idx]));
+    peaklo=max(max(peaklo,abs(inbufferl[idx])),abs(inbufferr[idx]));
+    l+=1;
+    );
+    
+//  peaklo=max(abs(peaklo),abs(peakhi));
+  tcfreq=1/(2*$pi*t);
+  dsrate=srate/detectorsize;
+  
+  mullo=1;
+  mulhi=1;
+
+  peaklo>0.0001 && peaklo>=thresh? mullo=(thresh)/peaklo;
+  peakhi>0.0001 && peakhi>=thresh? mulhi=(thresh)/peakhi;;
+
+  DidPick=0;
+  mullo<amullo? 
+  (
+  amullo=mullo;
+  );
+  
+  
+  mulhi<amulhi?  
+  (
+  abs(mulhi-amulhi)>0.02? 
+  (
+  DidPick=1;
+  chain==0?
+    (
+    l=0;
+    while (l<30)
+    (
+    MimicTimes[l]=rand(300);
+    l+=1;
+    );
+    //rand(x) -- returns a psuedorandom number between 0 and the parameter.
+    );
+  )
+  : chain=0;
+  amulhi=mulhi; 
+  ) : chain=0;; 
+
+
+  // was 0.026
+  ReleaseTime=0.026;
+  amullo+=(mullo-amullo)*ReleaseTime;
+  amulhi+=(mulhi-amulhi)*ReleaseTime;
+ 
+  l=0;
+  
+  while (l<detectorsize)
+    (
+    p=(l)/detectorsize;
+    cwin=(1-((cos(2*p*$pi)+1)/2));
+    idx=(coff+count+l)%detectorsize;
+    l>=(detectorsize/2)? (outbufferl[idx]=0;outbufferr[idx]=0;);
+    outbufferl[idx]+=((inbufhil[idx]*DBtoLinear(higain)*amulhi)+(DBtoLinear(logain)*inbufferl[idx]*amullo))*cwin;
+    outbufferr[idx]+=((inbufhir[idx]*DBtoLinear(higain)*amulhi)+(DBtoLinear(logain)*inbufferr[idx]*amullo))*cwin;
+    l+=1;
+    );
+    
+  mulbufferlo[pbidx]=amullo;
+  mulbufferhi[pbidx]=amulhi;
+  PickHits[pbidx]=chain==1? 0 : DidPick;
+  DidPick==1? Chain=1;
+  pbidx=(pbidx+1)%4096;
+  count=0;
+  coff=((floor((coff/(detectorsize/2)))+1)*(detectorsize/2))%detectorsize;
+  );
+  
+
+spl0 = fl;
+spl1 = fr;
+spl0 = outl;
+spl1 = outr;
+
+
