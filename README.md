@@ -13,7 +13,7 @@ Dials can either be "Mouse-Dragged" or "Mouse-wheeled" when hovered over them. R
 
 In-Gain - will boost the lower or upper bands and force more aggressive limiting, great for metal \m/ .
 
-Out-Gain controls the band output level after limiting.
+Out-Gain controls the bands output levels after limiting.
 
 Release-Time controls the release time for both limiters, using the Time-Constant math, probably very wrong.
 
