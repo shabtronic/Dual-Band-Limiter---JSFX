@@ -15,6 +15,9 @@ In-Gain - will boost the lower or upper bands and force more aggressive limiting
 
 Out-Gain controls the bands output levels after limiting.
 
+Limiter level is hardcoded to -1 +1 but can use the in-gain and out-gain for the bands to control the effective limit level. I coded this so all my guitar/edm tracks
+are the same peak level and then just mix with post faders.
+
 Release-Time controls the release time for both limiters, using the Time-Constant math, probably very wrong.
 
 Mouse drag to move the pre-eq Control points and Mouse Wheel to change the Q/Bandwidth.
