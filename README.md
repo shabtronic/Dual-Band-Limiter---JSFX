@@ -21,4 +21,6 @@ Mouse drag to move the pre-eq Control points and Mouse Wheel to change the Q/Ban
 
 Mouse drag the yellow circle on the lower part of the screen to change the dual-band freq split, no Q/Bandwidth control on that one.
 
+Coding style is "Wildcat" - i.e. RnD careless rapid coding, probably will refactor it all later :)
+
 ![](./Images/Image1.png)
