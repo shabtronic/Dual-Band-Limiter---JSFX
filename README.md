@@ -6,5 +6,9 @@ A Very simple Dual-Band Limiter. Uses classic RJB Bi-Quads to split the signal i
 Left some half-assed "cloner" system in there - tries to detect guitar picking and clone the signal with delays to give a big wide "Multi-Tracked" sound. Didn't work at all - sounds like a right old mess - hahhah.
 
 Also added a "Draw Freq" option - tries to identify peaks in the lower end of the FFT and displays the HZ - works, a little messy tho.
+ 
+Mouse drag to move the pre-eq Control points and Mouse Wheel to change the Q/Bandwidth.
+
+Mouse drag the yellow circle on the lower part of the screen to change the dual-band freq split, no Q/Bandwidth control on that one.
 
 ![](./Images/Image1.png)
