@@ -9,6 +9,8 @@ Also added a "Draw Freq" option - tries to identify peaks in the lower end of th
 
 "Post EQ" has no code - so it doesn't do anything, might add a 5 band eq later.
 
+Dials can either be "Mouse-Dragged" or "Mouse-wheeled" when hovered over them. Right click will reset the dials value back to the default.
+
 In-Gain - will boost the lower or upper bands and force more aggressive limiting, great for metal \m/ .
 
 Out-Gain controls the band output level after limiting.
