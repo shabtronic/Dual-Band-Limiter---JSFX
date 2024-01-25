@@ -1,4 +1,4 @@
-desc:Dual-Band Limiter
+`desc:Dual-Band Limiter
 
 /*
 (C) 2023 S.D.Smith - all rights reserved
@@ -9,10 +9,12 @@ slider2:dtime=13<3,250,1>-Detector time(ms)
 slider3:lpf=2310<40,10000>-Freq
 slider4:logain=0<-24,24>-Lo Gain
 slider5:higain=0<-24,24>-Hi Gain
-slider7:rtime=1<1,14>-Release time(ms)
+//slider7:rtime=1<1,14>-Release time(ms)
 slider8:fq=0.5<0.01,30.5>-Filter Q
 slider10:logainin=0<-24,24>-Input Gain Lo
 slider11:higainin=0<-24,24>-Input Gain Hi
+
+slider12:ReleaseTime=250<0,500>-Release Time
 
 slider20:freq1=150<0,24000>-Freq1
 slider21:gain1=14<-24,24>-Gain1
@@ -33,12 +35,19 @@ slider31:PreEqVisible=1<0,1,1>-PreEqVisible
 slider32:PostEqEnabled=0<0,0,1>-PostEqEnabled
 slider33:PostEqVisible=0<0,0,1>-PostEqVisible
 
+slider40:CloneCount=0<1,14>-CloneCount
+slider41:CloneSpread=0.5<0,1>-CloneSpread
+
+slider50:DrawFreq=0<0,0,1>-DrawFreq
+
 in_pin:left input
 in_pin:right input
+in_pin:Acoustic Track
 out_pin:left output
 out_pin:right output
 options:no_meter
 options:gfx_hz=144
+
 //options:gfx_hz=60
 //options:gfx_hz=30
 //options:gfx_hz=5
@@ -143,7 +152,7 @@ BiQuadRight=ArrayAlloc(18);
 BiQuadHiLeft=ArrayAlloc(18);
 BiQuadHiRight=ArrayAlloc(18);
 
-
+BiQuadAcoustic=ArrayAlloc(18);
 mulbufferhi=ArrayAlloc(4096);
 mulbufferlo=ArrayAlloc(4096);
 outbufferl=ArrayAlloc(4096);
@@ -158,8 +167,14 @@ inbufhir=ArrayAlloc(4096);
 PickHits=ArrayAlloc(4096);
 
 SliderParams=ArrayAlloc(100);
-MimicTimes=ArrayAlloc(100);
+CloneTimes=ArrayAlloc(100);
+CloneTimeMax=4096*4;
+CloneBufferL = ArrayAlloc(CloneTimeMax);
+CloneBufferR = ArrayAlloc(CloneTimeMax);
 
+HitBufL=ArrayAlloc(4096);
+HitBufR=ArrayAlloc(4096);
+CloneP=0;
 PreEQ = ArrayAlloc(8*5*2); // 8 Params x 5 sets x 2 Stereo
 BiQuadQ=0.5;
 
@@ -327,12 +342,12 @@ asy=(min(sy,ey)-(rad));
 aex=(max(sx,ex)+(rad));
 aey=(max(sy,ey)+(rad));
 ssy=floor(asy);
-while (ssy<=aey+1)
+while (ssy<aey+1)
   (
   ssx=floor(asx);
-  while (ssx<=aex+1)
+  while (ssx<aex+1)
     (
-    ld=sdfLine(ssx,ssy,sx,sy,ex,ey)-rad;
+    ld=sdfLine(ssx+0.5,ssy+0.5,sx,sy,ex,ey)-rad;
     ld<1? 
       (
       AA=glstep(-g_blur*ld,-1,1);
@@ -587,16 +602,35 @@ psv=0.5*SPlitPos;
 ppsv=0.5*SPlitPos;
 pppsv=0.5*SPlitPos;
 xxcount=0;
+tfo=0;
 while (sx<gfx_w)
   (
   // Draw FFT
-  FP = StartFreqP+(InvToCurve((sx/gfx_w))  * (EndFreqP - StartFreqP));
+  FPP = StartFreqP+(InvToCurve(((sx-1)/gfx_w))  * (EndFreqP - StartFreqP));
+  FPN = StartFreqP+(InvToCurve(((sx+1)/gfx_w))  * (EndFreqP - StartFreqP));
+  FP =  StartFreqP+(InvToCurve((sx/gfx_w))  * (EndFreqP - StartFreqP));
   v=GaussSample(FP*(FFTSize/2),FFTMag,FFTSize/2);
+  vp=GaussSample(FPP*(FFTSize/2),FFTMag,FFTSize/2);
+  vn=GaussSample(FPN*(FFTSize/2),FFTMag,FFTSize/2);
+ 
+ DrawFreq && vp<=v && vn<=v && fp*srate/2>50 && fp*srate/2<400 ?
+      (
+      gfx_set(1,0.4,0,1);
+      ts=#;
+      sprintf(ts,"%2.2f",fp*srate/2);
+      gfx_measurestr(ts,tw,th);
+      gfx_x=sx-tw/2;
+      ;
+      tfo=(gfx_x/10)%3;
+      gfx_y=50+tfo*th;
+      gfx_drawstr(ts);
+      gfx_line(sx,splitpos-10,sx,gfx_y+Th);
+      );
   v=1-(-20*log10((v)/10)/-DBMin);
   v=min(max(v,0),1);
   gfx_set(0.5,0.0,0.5,0.2);
   vgrad(sx,gfX_h*split,-v*gfx_h*split,0.2,0.2,0.2,1,0.2,0.2,0.2,1);
-  gfx_set(1,1,0.,0.25);
+  gfx_set(1,1,1,0.7);
   gfx_line(sx-1,SplitPos-(pv)*SplitPos,sx,SplitPos-v*SplitPos);
   //AAColour(0.2,0.2,1,1);
   //AALine(sx-1,gfx_h*split-(pv)*gfx_h*split,sx,gfX_h*split-v*gfx_h*split,5);
@@ -670,7 +704,7 @@ while (sx<gfx_w)
   gfx_line(sx-1,gfx_h-pmulphi*(gfx_h-SplitPos),sx,gfx_h-mulphi*(gfx_h-SplitPos),lw);
  PickHits[si]&1? 
  (
- gfx_set(1,1,0,1);
+ gfx_set(1,1,0,0.7);
  
  gfx_line(sx,gfx_h,sx,SplitPos,lw);
  );
@@ -698,7 +732,6 @@ while (gx1<=10000)
   gfx_y=(SplitPos)-20;
   gfx_set(1,1,1,0.5);
   ts=#;
-
  gx1==2000 || gx1==5000 || gx1==10000|| gx1==20 || gx1==50 || gx1==100 || gx1==200 || gx1==500 || gx1==1000?
  (
  sprintf(ts,"%d",gx1);
@@ -955,11 +988,11 @@ value;
   AABlur(ablur);
  DialX=(gfx_h-SplitPos);
  DialY=gfx_h-(gfx_h-SplitPos);
- DialRad=min(((gfx_h-SplitPos)/2),70);
+ DialRad=min(((gfx_h-SplitPos)/2.5),70);
   DialX=DialRad*2;//(gfx_h-SplitPos);
  DialGap=0;
  AAColour(1,0.5,0.2,0.3);
- AALine(DialGap+DialX,DialY,DialGap+DialX*2.1,DialY,DialRad+5);
+ AALine(DialGap+DialX,DialY,DialGap+DialX*3.2,DialY,DialRad+5);
  AAColour(0,0.5,1,0.3);
  
  AALine(gfx_w-DialGap-DialX,DialY,gfx_w-DialGap-DialX*2.1,DialY,DialRad+5);
@@ -969,6 +1002,7 @@ value;
  higain=AADial(gfx_w-DialGap-DialX,DialY,DialRad,"Out-Gain","%2.1f db",higain,-24,24,0);
  higainin=AADial(gfx_w-DialGap-(DialX*2.1),DialY,DialRad,"In-Gain","%2.1f db",higainin,-24,24,0);
 
+ ReleaseTime=AADial(DialGap+DialX*3.2,DialY,DialRad,"Release","%2d ms",ReleaseTime,12,500,250);
 
  gfx_set(1,1,1,0.5);
  gfx_measurestr("Lo-Band",tw,th);
@@ -999,54 +1033,59 @@ value;
   PowerButton(x-th/2,y,th/2,val);
   
   );
-  MDialCount= floor(MimicCount)<=0 ? 1 : 4;
+  MDialCount= 4;
   MDialRad=DialRad/1.5;
+  DialBorder=5;
   gfx_set(0.3,0.3,1,1);
   SetFontSize(25);
  // MimicOn=ButtonText(gfx_w/2,SplitPos-MDialRad*1.6,"Cloner",MimicOn);
-  SetFontSize(14);
+  SetFontSize(16);
   // 1 2 3 4
   DialStartX=gfX_w/2-(MDialRad*1.05*(MDialCount-1));
-  DialY=SplitPos+MDialRad;
-  AALine(DialStartX,DialY,DialStartX+((MDialRad)*2.1*(MDialCount-1)+0.001),DialY,MDialRad+5);
-  MimicCount=floor(AADial(DialStartX+MDialRad*2.1*0,DialY,MDialRad,"Clones","%d",MimicCount,0,14,0));
-  MDialCount>1?
+  DialY=SplitPos+MdIALrAD;/*+MDialRad-MDialRad/2*/;
+  
+  mrx=DialStartX-MDialRad-DialBorder;
+  mry=Dialy-MDialRad-DialBorder;
+  mrw=MDialRad*2.1*4+DialBorder;
+  mrh=MDialRad*2+10;
+  mouse_x>=mrx && mouse_x<(mrx+mrw) && mouse_y>mry && mouse_y<(mry+mrh) ? MouseIsOver=1 : MouseIsOver=0;
+  
+  AAColour(0.5,0.5,0,1);
+
+    SetFontSize(MDialRad/1.4);
+  
+    gfx_measurestr("Cloner",tw,th);
+ (MouseIsOver && ControlIdx==-1) || ControlIdx>=10?
     (
-    MimicPan=AADial(DialStartX+MDialRad*2.1*1,DialY,MDialRad,"Pan","%0.2f",MimicPan,-1,1,0);
-    MimicSpread=AADial(DialStartX+MDialRad*2.1*2,DialY,MDialRad,"Spread","%0.2f",MimicSpread,0,1,0);
-    MimicLevel=AADial(DialStartX+MDialRad*2.1*3,DialY,MDialRad,"Level","%0.2f db",MimicLevel,-24,24,0);
+    AALine(DialStartX,DialY,DialStartX+((MDialRad)*2.1*(MDialCount-1)+0.001),DialY,MDialRad+DialBorder);
+    AAColour(0.5,0.5,0,1);
+    AALine(gfx_w/2-tw/2,DialY-MDialRad,gfx_w/2+tw/2,DialY-MDialRad,th);
+    gfx_x=gfx_w/2-tw/2;
+    gfx_y=DialY-MDialRad-th;
+    gfx_set(0.95,0.95,0.95,1); 
+    CloneCount>=1? gfx_set(0.3,1,0.3,1);
+    gfx_drawstr("Cloner");
+    SetFontSize(16);
+    CloneCount=floor(AADial(DialStartX+MDialRad*2.1*0,DialY,MDialRad,"Clones","%d",CloneCount,0,14,0));
+    ClonePan=AADial(DialStartX+MDialRad*2.1*1,DialY,MDialRad,"Pan","%0.2f",ClonePan,-1,1,0);
+    CloneSpread=AADial(DialStartX+MDialRad*2.1*2,DialY,MDialRad,"Tight","%0.2f",CloneSpread,0,1,0.5);
+    CloneLevel=AADial(DialStartX+MDialRad*2.1*3,DialY,MDialRad,"Level","%0.2f db",CloneLevel,-24,24,0);
+    )
+    :
+    (
+    DialY=SplitPos;
+    AAColour(1,1,0,0.5);
+    AALine(gfx_w/2-tw/2,DialY,gfx_w/2+tw/2,DialY,th/2);
+    
+    gfx_x=gfx_w/2-tw/2;
+    gfx_y=DialY-th/2;
+    gfx_set(0.75,0.75,0.75,1); 
+      CloneCount>=1? gfx_set(0.5,1,0.5,1);
+    gfx_drawstr("Cloner")
     );
+    DrawFreq?  gfx_Set(1,0.5,0,1): gfx_set(0.3,0.3,0.3,1);
+ DrawFreq=ButtonText(30,18,"Draw Freq",DrawFreq);
 
-//  gfx_set(1,1,1,1);
-//  gfx_line(gfx_w/2,0,gfx_w/2,gfx_h);
-/*
-x=0;
-aang+=0.01;
-lcount=6;
-spx=gfx_w/2;
-spy=SPlitPos/2;
-rad=SplitPos/2-20;
-xxmul=(abs(xxmul)+0.015);
-xxmul>lcount*5 ? xxmul-=lcount*5;
-xxmul=1;
-AAColour(0.85,0.85,0.85,0.05);
-while (x<lcount)
-(
-ang=aang+2*$pi*x/lcount*xxmul;
-angd=2*$pi*1/lcount*xxmul;
-px=cos(ang-angd)*rad+spx;
-py=sin(ang-angd)*rad+spy;
-
-sx=cos(ang)*rad+spx;
-sy=sin(ang)*rad+spy;
-ex=cos(ang+angd)*rad+spx;
-ey=sin(ang+angd)*rad+spy;
-eex=cos(ang+angd*2)*rad+spx;
-eey=sin(ang+angd*2)*rad+spy;
-AAContinuousLine(px,py,sx,sy,ex,ey,eex,eey,20);
-x+=1;
-);
-*/
   Last_Cap=mouse_cap;
   
 @slider
@@ -1060,12 +1099,15 @@ x+=1;
  BiQuadPeak(PreEQ+(1*16+8),Freq2,Q2,Gain2); // R2
  BiQuadPeak(PreEQ+(2*16),Freq3,Q3,Gain3); // L3
  BiQuadPeak(PreEQ+(2*16+8),Freq3,Q3,Gain3); // R3
+ BiQuadHiPass(BiQuadAcoustic,1500,0.5);
 @sample
 
  
 
 inl=spl0;
 inr=spl1;
+Acoustic=spl2;
+
 // Process PreEQ
 PreEQEnabled?
   (
@@ -1131,17 +1173,89 @@ inbufferl[coff+count]=fl*DBtoLinear(logainin);
 inbufferr[coff+count]=fr*DBtoLinear(logainin);
 inbufhil[coff+count]=inhil*DBtoLinear(higainin);
 inbufhir[coff+count]=inhir*DBtoLinear(higainin);
+Acoustic=BiQuadProcess(BiQuadAcoustic,Acoustic);
+HitBufL[coff+count]=Acoustic*DBtoLinear(24);
+HitBufR[coff+count]=Acoustic*DBtoLinear(24);
+CloneBufferL[CloneP]=DBtoLinear(CloneLevel)*inhil*DBtoLinear(higainin);
+CloneBufferR[CloneP]=DBtoLinear(CloneLevel)*inhir*DBtoLinear(higainin);
+
 count+=1;
 
 count>=(detectorsize/2) ?
   (
   l=0;
-  peakhi=0;
-  peaklo=0;
+  Hitpeak=0;
+  Hitpeaklo=0;
+  PeakMul=1;
   while(l<detectorsize)
     (
     idx=(coff+count+l)%detectorsize;
-    peakhi=max(max(peakhi,abs(inbufhil[idx])),abs(inbufhir[idx]));
+    peakhi=max(max(peakhi,abs(HitBufL[idx])),abs(HitBufR[idx]));
+    l+=1;
+    );
+    
+    peakhi>0.0001 && peakhi>=thresh? PeakMul=(thresh)/peakhi;;  
+    RTF=1/(2*$pi*ReleaseTime/1000);
+    xrate=srate/detectorsize;
+    AReleaseTime=tan(2*$pi*RTF/xrate);
+   // AReleaseTime=0.026;
+    APeakMul+=(PeakMul-APeakMul)*AReleaseTime;
+     DidPick=0; 
+    PeakMul<APeakMul?  
+    (
+    abs(PeakMul-APeakMul)>0.02? 
+    (
+    DidPick=1;
+    chain==0?
+      (
+      l=0;
+      while (l<30)
+      (
+      CloneTimes[l]=rand((CloneTimeMax-detectorsize)*CloneSpread);
+      l+=1;
+      );
+      );
+    )
+    : chain=0;
+    APeakMul=PeakMul; 
+    ) : chain=0;; 
+    
+    
+  peakhi=0;
+  peaklo=0;
+  l=0;
+  while(l<detectorsize)
+    (
+    idx=(coff+count+l)%detectorsize;
+    
+   // -1 = L1   R0
+   // 0  = L0.5 R0.5
+   // 1  = L0   R1
+   // L=((1-P)/2;
+   // R=1-((1-P)/2);
+    cl=0;
+ 
+   COL=0;
+   COR=0;
+   Pan=-1;
+   PanDelta=2/(CloneCount-1);
+   PanDelta<=0 ? Pan=0;
+   while (cl<CloneCount)
+    (
+    CloneCP=((CloneTimeMax)+CloneP+l-detectorsize-CloneTimes[cl])%(CloneTimeMax);
+    LP=(1-PAN)/2;
+    RP=1-LP;
+    COL+=CloneBufferL[CloneCP]*LP;
+    COR+=CloneBufferR[CloneCP]*RP;
+    Pan+=PanDelta;
+    Pan>1? Pan-=2;
+    cl+=1;
+    );    
+   // inbufhil[idx]+=COl;
+   // inbufhir[idx]+=COR;
+    LV=abs(inbufhil[idx]+COL);
+    RV=abs(inbufhir[idx]+COR);
+    peakhi=max(max(peakhi,LV),RV);
     peaklo=max(max(peaklo,abs(inbufferl[idx])),abs(inbufferr[idx]));
     l+=1;
     );
@@ -1156,51 +1270,52 @@ count>=(detectorsize/2) ?
   peaklo>0.0001 && peaklo>=thresh? mullo=(thresh)/peaklo;
   peakhi>0.0001 && peakhi>=thresh? mulhi=(thresh)/peakhi;;
 
-  DidPick=0;
-  mullo<amullo? 
-  (
-  amullo=mullo;
-  );
-  
-  
-  mulhi<amulhi?  
-  (
-  abs(mulhi-amulhi)>0.02? 
-  (
-  DidPick=1;
-  chain==0?
-    (
-    l=0;
-    while (l<30)
-    (
-    MimicTimes[l]=rand(300);
-    l+=1;
-    );
-    //rand(x) -- returns a psuedorandom number between 0 and the parameter.
-    );
-  )
-  : chain=0;
-  amulhi=mulhi; 
-  ) : chain=0;; 
+
+  mullo<amullo?  amullo=mullo;
+  mulhi<amulhi?   amulhi=mulhi; 
+ 
 
 
-  // was 0.026
-  ReleaseTime=0.026;
-  amullo+=(mullo-amullo)*ReleaseTime;
-  amulhi+=(mulhi-amulhi)*ReleaseTime;
+
+  amullo+=(mullo-amullo)*AReleaseTime;
+  amulhi+=(mulhi-amulhi)*AReleaseTime;
  
   l=0;
-  
   while (l<detectorsize)
     (
-    p=(l)/detectorsize;
+    p=l/detectorsize;
     cwin=(1-((cos(2*p*$pi)+1)/2));
     idx=(coff+count+l)%detectorsize;
     l>=(detectorsize/2)? (outbufferl[idx]=0;outbufferr[idx]=0;);
-    outbufferl[idx]+=((inbufhil[idx]*DBtoLinear(higain)*amulhi)+(DBtoLinear(logain)*inbufferl[idx]*amullo))*cwin;
-    outbufferr[idx]+=((inbufhir[idx]*DBtoLinear(higain)*amulhi)+(DBtoLinear(logain)*inbufferr[idx]*amullo))*cwin;
-    l+=1;
-    );
+     cl=0;
+    
+    COL=0;
+    COR=0;
+    Pan=-1;
+    PanDelta=2/(CloneCount-1);
+    PanDelta<=0 ? Pan=0;
+    while (cl<CloneCount)
+     (
+     CloneCP=((CloneTimeMax)+CloneP+l-detectorsize-CloneTimes[cl])%(CloneTimeMax);
+     LP=(1-PAN)/2;
+     RP=1-LP;
+     COL+=CloneBufferL[CloneCP]*LP;
+     COR+=CloneBufferR[CloneCP]*RP;
+     Pan+=PanDelta;
+     Pan>1? Pan-=2;
+     cl+=1;
+     ); 
+    
+    outbufferl[idx]+=(((inbufhil[idx]+COL)*DBtoLinear(higain)*amulhi)+(DBtoLinear(logain)*inbufferl[idx]*amullo))*cwin;
+    outbufferr[idx]+=(((inbufhir[idx]+COR)*DBtoLinear(higain)*amulhi)+(DBtoLinear(logain)*inbufferr[idx]*amullo))*cwin;
+   // Do the Clones!!
+ 
+
+
+  // outbufferl[idx]+=COL*DBtoLinear(CloneLevel)*cwin*amulhi;
+ //  outbufferr[idx]+=COR*DBtoLinear(CloneLevel)*cwin*amulhi;
+   l+=1;
+   );
     
   mulbufferlo[pbidx]=amullo;
   mulbufferhi[pbidx]=amulhi;
@@ -1210,7 +1325,7 @@ count>=(detectorsize/2) ?
   count=0;
   coff=((floor((coff/(detectorsize/2)))+1)*(detectorsize/2))%detectorsize;
   );
-  
+  CloneP=(CloneP+1)%(CloneTimeMax);
 
 spl0 = fl;
 spl1 = fr;
